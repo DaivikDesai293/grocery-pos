@@ -1,0 +1,32 @@
+{
+  "name": "grocery-pos-mobile",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Owner/manager dashboard app for the Grocery POS system (Expo + React Native). Read-only reports, sales trends, and reorder alerts on the go — checkout stays on the web POS terminal.",
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^15.0.2",
+    "@react-navigation/bottom-tabs": "^6.5.0",
+    "@react-navigation/native": "^6.1.0",
+    "@react-navigation/native-stack": "^6.9.0",
+    "axios": "^1.7.7",
+    "expo": "~57.0.0",
+    "expo-asset": "~57.0.17",
+    "expo-secure-store": "~57.0.4",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-native": "^0.86.0",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.0",
+    "babel-preset-expo": "~57.0.0"
+  }
+}

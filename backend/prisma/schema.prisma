@@ -1,0 +1,233 @@
+// Grocery POS — Prisma schema (PostgreSQL)
+// After `npm install`, run: npx prisma migrate dev --name init
+// This generates and applies the migration SQL automatically — you do not
+// need to write any SQL by hand. See docs/DATABASE.md for an ER diagram
+// and a plain-SQL reference translation of this file.
+//
+// Convention: fields are camelCase in Prisma/JS, snake_case in the actual
+// Postgres columns (via @map) — the usual pairing for each ecosystem, and
+// it makes any raw SQL (see report.service.js) read naturally with no
+// quoting gymnastics.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  CASHIER
+}
+
+enum StockMovementType {
+  RECEIVE // stock coming in from a supplier
+  SALE // stock going out via a checkout (mirrors a SaleItem)
+  ADJUSTMENT // manual correction (stocktake, damage found, etc.)
+  WASTE // spoilage / breakage / expiry write-off
+  RETURN // customer return added back to stock
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  OTHER
+}
+
+enum SaleStatus {
+  COMPLETED
+  VOIDED
+  REFUNDED
+}
+
+/// Employees / system users who can log in to the POS or the admin/mobile app.
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         Role     @default(CASHIER)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  sales          Sale[]
+  stockMovements StockMovement[]
+  refreshTokens  RefreshToken[]
+
+  @@map("users")
+}
+
+/// Hashed refresh tokens, so a stolen access token alone can't be replayed
+/// forever and a single device/session can be revoked (logout).
+model RefreshToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique @map("token_hash")
+  userId    String    @map("user_id")
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model Category {
+  id        String    @id @default(uuid())
+  name      String    @unique
+  products  Product[]
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@map("categories")
+}
+
+model Supplier {
+  id          String    @id @default(uuid())
+  name        String
+  contactName String?   @map("contact_name")
+  phone       String?
+  email       String?
+  address     String?
+  products    Product[]
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@map("suppliers")
+}
+
+/// Every item the store sells. Quantities use 3 decimal places so produce
+/// sold by weight (e.g. 1.250 kg) works alongside whole units.
+model Product {
+  id               String   @id @default(uuid())
+  sku              String   @unique
+  barcode          String?  @unique
+  name             String
+  description      String?
+  unit             String   @default("each") // each, kg, lb, litre, ...
+  costPrice        Decimal  @map("cost_price") @db.Decimal(10, 2)
+  sellPrice        Decimal  @map("sell_price") @db.Decimal(10, 2)
+  taxRate          Decimal  @default(0) @map("tax_rate") @db.Decimal(5, 4) // 0.0825 = 8.25%
+  quantityOnHand   Decimal  @default(0) @map("quantity_on_hand") @db.Decimal(10, 3)
+  reorderThreshold Decimal  @default(0) @map("reorder_threshold") @db.Decimal(10, 3)
+  reorderQuantity  Decimal  @default(0) @map("reorder_quantity") @db.Decimal(10, 3)
+  active           Boolean  @default(true)
+
+  categoryId String?   @map("category_id")
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  supplierId String?   @map("supplier_id")
+  supplier   Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+
+  saleItems      SaleItem[]
+  stockMovements StockMovement[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([categoryId])
+  @@index([supplierId])
+  @@index([name])
+  @@map("products")
+}
+
+/// Append-only audit trail of every stock change, whatever the cause.
+/// quantityOnHand on Product is the running total; this table is *why* it
+/// is what it is, and is what stocktakes/audits get reconciled against.
+model StockMovement {
+  id             String            @id @default(uuid())
+  productId      String            @map("product_id")
+  product        Product           @relation(fields: [productId], references: [id], onDelete: Restrict)
+  type           StockMovementType
+  quantityChange Decimal           @map("quantity_change") @db.Decimal(10, 3) // signed: + in, - out
+  note           String?
+  userId         String?           @map("user_id")
+  user           User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  saleId         String?           @map("sale_id")
+  sale           Sale?             @relation(fields: [saleId], references: [id], onDelete: SetNull)
+  createdAt      DateTime          @default(now()) @map("created_at")
+
+  @@index([productId])
+  @@index([createdAt])
+  @@map("stock_movements")
+}
+
+/// Optional — lets a sale be tagged to a customer for loyalty points.
+/// Checkout works perfectly well with no customer attached.
+model Customer {
+  id            String   @id @default(uuid())
+  name          String
+  phone         String?
+  email         String?
+  loyaltyPoints Int      @default(0) @map("loyalty_points")
+  sales         Sale[]
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@map("customers")
+}
+
+model Sale {
+  id         String    @id @default(uuid())
+  saleNumber Int       @unique @default(autoincrement()) @map("sale_number") // human-friendly receipt #
+  cashierId  String    @map("cashier_id")
+  cashier    User      @relation(fields: [cashierId], references: [id], onDelete: Restrict)
+  customerId String?   @map("customer_id")
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  subtotal      Decimal @db.Decimal(10, 2)
+  taxTotal      Decimal @map("tax_total") @db.Decimal(10, 2)
+  discountTotal Decimal @default(0) @map("discount_total") @db.Decimal(10, 2)
+  total         Decimal @db.Decimal(10, 2)
+
+  paymentMethod  PaymentMethod @map("payment_method")
+  amountTendered Decimal?      @map("amount_tendered") @db.Decimal(10, 2) // cash only
+  changeDue      Decimal?      @map("change_due") @db.Decimal(10, 2) // cash only
+
+  status     SaleStatus @default(COMPLETED)
+  voidReason String?    @map("void_reason")
+
+  items          SaleItem[]
+  stockMovements StockMovement[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([cashierId])
+  @@index([status])
+  @@map("sales")
+}
+
+/// A line item on a sale. Price/name/tax are snapshotted at sale time so a
+/// later price change never rewrites history on old receipts/reports.
+model SaleItem {
+  id          String  @id @default(uuid())
+  saleId      String  @map("sale_id")
+  sale        Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productId   String  @map("product_id")
+  product     Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  productName String  @map("product_name")
+  quantity    Decimal @db.Decimal(10, 3)
+  unitPrice   Decimal @map("unit_price") @db.Decimal(10, 2)
+  taxRate     Decimal @map("tax_rate") @db.Decimal(5, 4)
+  lineTotal   Decimal @map("line_total") @db.Decimal(10, 2)
+
+  @@index([saleId])
+  @@index([productId])
+  @@map("sale_items")
+}
+
+/// Single-row table of store-wide settings shown on receipts and reports.
+model StoreSetting {
+  id             String   @id @default(uuid())
+  storeName      String   @default("My Grocery Store") @map("store_name")
+  address        String?
+  phone          String?
+  currency       String   @default("USD")
+  defaultTaxRate Decimal  @default(0) @map("default_tax_rate") @db.Decimal(5, 4)
+  receiptFooter  String?  @map("receipt_footer")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("store_settings")
+}
